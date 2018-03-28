@@ -6,6 +6,7 @@ import csv
 import psutil
 import os
 import time
+import re
 
 logging.basicConfig(level=logging.DEBUG,
                     format='(%(asctime)-15s) (%(threadName)-10s) %(message)s'
@@ -14,7 +15,7 @@ isfirst = True
 threada_pid = 0
 threadb_pid = 0
 threadc_pid = 0
-fieldscoll = []
+fieldscoll = ""
 
 class XMLCreator(Thread):
 
@@ -52,7 +53,7 @@ class XMLCreator(Thread):
                 etree.SubElement(child, "Field", Name=fields_name[k]).text = str(val_pattern[k]) + str(i)
 
             #stream queue element to xml consumer thread
-            self.q.put(etree.tostring(child, xml_declaration=True, pretty_print=True))
+            self.q.put(etree.tostring(child))
             objectelement.remove(child)
 
         self.q.put(None) #sending notification none when xaml ends
@@ -60,16 +61,20 @@ class XMLCreator(Thread):
 
 class XMLParser(Thread):
 
-    def __init__(self, q):
+    def __init__(self, numrows, q):
         self.q = q
+        self.num = numrows
         self.rows = 0
         self.start
         self.rows1 = 0
+        self.fields1 = ""
         Thread.__init__(self)
         self.q = q
+        self.num = numrows
         self.rows = 0
         self.start
         self.rows1 = 0
+        self.fields1 = ""
 
     def run(self):
 
@@ -77,7 +82,7 @@ class XMLParser(Thread):
 
         #deleting the fine if exists
         try:
-            os.remove('testxmlmethod.csv')
+            os.remove('cpuandmemusage.csv')
         except OSError, e:
             print ("Error: %s - %s." % (e.filename, e.strerror))
 
@@ -94,39 +99,27 @@ class XMLParser(Thread):
         self.q.task_done()
 
     def writer(self, xmlelement):
-        global isfirst
-        global fieldscoll
 
-        xml = etree.fromstring(xmlelement)
-        fieldelements = etree.ElementTree(xml)
-        root = fieldelements.getroot()
-        head = []
-        fields = []
+        if self.rows1 < 100:
+            self.fields1 = (self.fields1 + re.compile(r'<[^>]+>').sub('', xmlelement) + "\r\n")
 
-        for element in fieldelements.iter("Field"):
+        if self.rows1 == 100:
             try:
-                fields.append(element.text)
-            except isfirst:
-                head.append(element.get("Name"))
-
-        self.rows += 1
-        self.rows1 += 1
-        fieldscoll.append(fields)
+                with open('cpuandmemusage.csv', "ab+") as f:
+                    f.write(self.fields1 + re.compile(r'<[^>]+>').sub('', xmlelement) + "\r\n")
+            finally:
+                self.rows1 = 0
+                self.fields1 = ""
+                f.close()
 
         if self.rows == 1000:
             print(time.time() - self.start)
             self.rows = 0
             self.start = time.time()
 
-        if self.rows1 == 100:
-            with open('testxmlmethod.csv', "ab+") as f:
-                csvwriter = csv.writer(f)
-                if isfirst:
-                    csvwriter.writerow(head)
-                    isfirst = False
-                csvwriter.writerows(fieldscoll)
-                fieldscoll = []
-                self.rows1 = 0
+        self.rows += 1
+        self.rows1 += 1
+
 
 
 class ThreadsResourceMonitor(Thread):
@@ -143,7 +136,7 @@ class ThreadsResourceMonitor(Thread):
         process = psutil.Process()
 
         try:
-            os.remove('cpuandmemusage.csv')
+            os.remove('resourcelog.csv')
         except OSError, e:
             print ("Error: %s - %s." % (e.filename, e.strerror))
 
@@ -193,14 +186,13 @@ class ThreadsResourceMonitor(Thread):
 
             if num == 10:
                 try:
-                    with open("cpuandmemusage.csv", "ab+") as f:
+                    with open("resourcelog.csv", "ab+") as f:
                         csvwriter = csv.writer(f)
                         csvwriter.writerows(lines)
                         num = 0
                         lines = []
                 finally:
                     f.close()
-        f.close()
 
 
 def init(numrows):
@@ -214,7 +206,7 @@ def init(numrows):
 
     #create threads
     ThreadA = XMLCreator(numrows, q)
-    ThreadB = XMLParser(q)
+    ThreadB = XMLParser(numrows, q)
     ThreadC = ThreadsResourceMonitor()
 
     #set threads name
@@ -238,5 +230,4 @@ def init(numrows):
     ThreadA.join()
     ThreadC.join()
 
-
-init(1000000)
+init(10000)
